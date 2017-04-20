@@ -13,8 +13,10 @@
 #include "stopwatch.h"
 
 
-//#define MCU_STM32F103R8
 #include <EEPROM.h>
+
+#include "task.h"
+
 
 #define MIN_PWM 1000
 
@@ -114,21 +116,22 @@ uint32 timer_tick;
  * Provides a micro-second granular delay using the CPU cycle counter.
  */
 
-/* cycles per microsecond */
+/*
+// cycles per microsecond 
 uint32_t us_ticks;
 
 
 void stopwatch_init(void)
 {
 //        RCC_ClocksTypeDef       clocks;
-        /* compute the number of system clocks per microsecond */
+        // compute the number of system clocks per microsecond 
 //        RCC_GetClocksFreq(&clocks);
 //        us_ticks = clocks.SYSCLK_Frequency / 1000000;
         us_ticks = CYCLES_PER_MICROSECOND; // F_CPU / 1000000;
 
-        /* turn on access to the DWT registers */
+        // turn on access to the DWT registers 
         DEMCR |= DEMCR_TRCENA;
-        /* enable the CPU cycle counter */
+        // enable the CPU cycle counter 
         DWT_CTRL |= CYCCNTENA;
 
         stopwatch_reset();
@@ -149,7 +152,7 @@ void stopwatch_delay_us(uint32_t us){
     }
 }
 
-
+*/
 
 
 
@@ -172,6 +175,10 @@ void eeprom_write_len(byte *p, uint16_t e, uint16_t l){
 
 }
 
+
+void task_loop(){ // parallel process
+
+}
 
 void setup_c() {
     pinMode(LED_PIN, OUTPUT);
@@ -317,6 +324,7 @@ void setup_c() {
 
     digitalWrite(LED_PIN, LED_OFF);
 
+    start_task(NULL, task_loop);
 
     Serial.println("Propeller stand");
     Serial.println(" press 'h' to get help");  
@@ -597,6 +605,8 @@ void loop_c() {
     default:
         break;
     }
+    
+    yield();
 }
 
 
@@ -652,6 +662,7 @@ void reset_rpm(){
     last_intcnt=0;
 }
 
+/*
 static uint32 _micros(void) {
     uint32 ms;
     uint32 cycle_cnt;
@@ -664,13 +675,13 @@ static uint32 _micros(void) {
     interrupts();
 
 #define US_PER_MS               1000
-    /* SYSTICK_RELOAD_VAL is 1 less than the number of cycles it
-     * actually takes to complete a SysTick reload */
+    // SYSTICK_RELOAD_VAL is 1 less than the number of cycles it
+    // actually takes to complete a SysTick reload 
     return ((ms * US_PER_MS) +
             (SYSTICK_RELOAD_VAL + 1 - cycle_cnt) / CYCLES_PER_MICROSECOND);
 #undef US_PER_MS
 }
-
+*/
 
 void calc_revo(){
     start_rotation=1; // as label
@@ -728,7 +739,7 @@ void fan_interrupt(){
     switch(rpm_mode) {
     case 0: // поиск максимальной длины
         if(dt > (t_max - (t_max*PULSE_GAP/100)) ) { // это может быть самый длинный
-            time_last = _micros(); // запомним его время
+            time_last = stopwatch_getticks();
         }    
     
         if(dt > t_max) {

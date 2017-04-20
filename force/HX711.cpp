@@ -33,7 +33,7 @@ void Hx711::get_zero()
 
 //****************************************************
 
-#define SUM_WEIGHT 4
+#define SUM_WEIGHT 1
 float Hx711::get_weight(float k)
 {
 
@@ -65,6 +65,7 @@ unsigned long Hx711::read(void)	//усиление 128
 
         uint32_t t = millis();
   	while(digitalRead(_dt)){ // wait for data ready
+  	    yield(0);
   	    if(millis() - t > 1000) { // no data for a second
   	        return -1;
   	    }
