@@ -36,9 +36,9 @@
 // on SPI2
 #define ADXL345_CS PB12
 #define ADXL345_READY PA8
-//#define ADXL345_INP PA9 // фотодиод - TIM1 CH2
+//#define PHOTO_IN_PIN PA9 // фотодиод - TIM1 CH2
 
-#define ADXL345_INP PA15 // фотодиод - TIM1 CH2
+#define PHOTO_IN_PIN PA15 // фотодиод - TIM1 CH2
 
 
 

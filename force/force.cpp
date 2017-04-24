@@ -257,9 +257,9 @@ void setup_c() {
     //Before communication starts, the Chip Select pin needs to be set high.
     digitalWrite(ADXL345_CS, HIGH);
     pinMode(ADXL345_READY, INPUT_PULLUP);
-    pinMode(ADXL345_INP, INPUT_PULLUP);
+    pinMode(PHOTO_IN_PIN, INPUT_PULLUP);
 
-    attachInterrupt(ADXL345_INP, fan_interrupt2, FALLING);
+    attachInterrupt(PHOTO_IN_PIN, fan_interrupt2, FALLING);
 /* нога A9 подключена к TIM1 CH2, так что лучше использовать аппаратный таймер для захвата времени
    вот только подпаяно к A15
 
@@ -274,7 +274,7 @@ void setup_c() {
     
     timer_tick = CYCLES_PER_MICROSECOND * prescaler; // one tick
     
-    gpio_set_mode(PIN_MAP[ADXL345_INP].gpio_device, PIN_MAP[ADXL345_INP].gpio_bit, GPIO_AF_OUTPUT_PP);
+    gpio_set_mode(PIN_MAP[PHOTO_IN_PIN].gpio_device, PIN_MAP[PHOTO_IN_PIN].gpio_bit, GPIO_AF_OUTPUT_PP);
     
 //    timer_set_capture_mode(TIMER1, 2, TIMER_IC_MODE_FILTER_0 | TIMER_IC_MODE_PRESCALER_8 | TIMER_IC_CAPTURE_RISING, 0);
     timer_set_mode(TIMER1, 2, TIMER_INPUT_CAPTURE);
@@ -832,8 +832,12 @@ void get_samples(){
 
         readRegister(DATAX0, 6, (uint8_t *)&d);
 
-        zero[sample_index] = start_rotation; // Photo label processed
+        byte v=digitalRead(PHOTO_IN_PIN);
+
+        if(start_rotation) v|=0x80;  // Photo label processed
+
         start_rotation = 0;
+        zero[sample_index] = v;
 
         //The ADXL345 gives 10-bit acceleration values
 
