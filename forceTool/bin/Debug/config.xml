@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="us-ascii"?>
+<Config>
+  <comport>COM1</comport>
+  <min>1140</min>
+  <max>1860</max>
+  <step>8</step>
+  <stepTime>500</stepTime>
+  <name>r3</name>
+</Config>

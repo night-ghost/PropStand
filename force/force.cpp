@@ -15,7 +15,7 @@
 
 #include <EEPROM.h>
 
-#include "task.h"
+//#include "task.h"
 
 
 #define MIN_PWM 1000
@@ -36,6 +36,8 @@ volatile long time_last = 0;
 volatile float rpm; // calculated in interrupt
 float last_rpm=0;
 
+volatile uint32_t dt;
+
 uint16_t pwm_val = MIN_PWM ;
 
 unsigned long previousMillis = 0; // храним время
@@ -44,7 +46,11 @@ unsigned long currentMillis = 0;
 const unsigned long STOP_TIME = 1000;  // 1s stop time
 byte start_rotation=0;
 
-int16_t current0; // начальный ток модуля
+float volt=0;
+float current = 0;
+float current0=0; // начальный ток модуля
+bool motor_on=false;
+
 
 Servo servo1; //объявляем 
 
@@ -92,7 +98,23 @@ int16_t acc_z0;
 // ]
 
 
-#define HIST_SIZE 512
+volatile uint32_t last_tim=0;
+
+
+uint32_t t_max=0;
+uint8_t rpm_mode = 0;
+volatile uint32_t int_cnt=0;
+//volatile uint16_t ovf_cnt=0;
+
+//volatile uint32_t int2_cnt=0;
+uint32_t res_time=0;
+
+uint32_t last_intcnt=0;
+uint16_t sides=0;
+
+
+
+#define HIST_SIZE 32
 
 uint32_t timer_hist[HIST_SIZE];
 uint16_t hist_ptr=0;
@@ -104,9 +126,11 @@ uint16_t hist_last_ptr=0;
 uint32_t regs[16] = { // регистры настройки режимов
     0,// r0 - координата, возвращаемая при измерении вибрации: 0 - x, 1 - y, 2 - z, 3 - max
     (uint32_t)(2710 * 1000L / 12.56),// r1 - коэффмциент коррекции напряжения * 1000
-    1000L,// r2 - коэффмциент коррекции тока * 1000
+    53234L,// r2 - коэффмциент коррекции тока * 1000
     155   * 1000L /20,// r3 - коэффициент тензодатчика силы, *1000
     415   * 1000L /20,// r4 - коэффициент тензодатчика момента, *1000
+    10000,            // r5 - максимальные обороты мотора
+    1,                // r6 - allow debug messages
 };
 
 uint32 timer_tick;
@@ -175,9 +199,68 @@ void eeprom_write_len(byte *p, uint16_t e, uint16_t l){
 
 }
 
+void debug_print(const char *s){
+    if(regs[6]){
+        Serial.print("#");
+        Serial.print(s);          
+    }
+}
+
+void debug_print(const char *s, long f){
+    if(regs[6]){
+        Serial.print("#");
+        Serial.print(s);      
+        Serial.println(f);         
+    }
+}
+
+void debug_print(const char *s, char *s1){
+    if(regs[6]){
+        Serial.print("#");
+        Serial.print(s);      
+        Serial.println(s1);         
+    }
+}
+
+void debug_print(const char *s, uint16_t l1, uint32_t l2){
+    if(regs[6]){
+        Serial.print("#");
+        Serial.printf(s, l1,l2);      
+        Serial.println();         
+    }
+}
+
+
+#define VOLT_K 50.0
+#define CURR_K 50.0
 
 void task_loop(){ // parallel process
+    float volt_raw = analogRead(VOLTAGE_PIN) / (regs[1] / 1000.0); //чтение напряжения
+    if(volt!=0)
+        volt     = volt * (1-1/VOLT_K) + volt_raw * (1/VOLT_K);
+    else
+        volt     = volt_raw;
 
+
+    float current_raw  = analogRead(CURRENT_PIN) / (regs[2] / 1000.0);
+
+    if(motor_on) {
+        if(current!=0) {
+            current  = current * (1 - 1/CURR_K) + (current_raw-current0)*(1/CURR_K);
+        }else{
+            current = current_raw;
+        }
+    } else {
+        if(current0!=0){
+            current0  = current0 * (1 - 1/CURR_K) + current_raw*(1/CURR_K);
+        }else{
+            current0 = current_raw;    
+        }
+    }
+}
+
+void yield(uint16_t ttw){
+    task_loop();
 }
 
 void setup_c() {
@@ -215,7 +298,7 @@ void setup_c() {
     sts=EEPROM.count(&cnt);
     
     if(sts==EEPROM_OK && cnt>0) {
-        eeprom_read_len((byte *)&regs,0, sizeof(regs));
+        eeprom_read_len((byte *)&regs, 0, sizeof(regs));
     }
     
     
@@ -309,7 +392,7 @@ void setup_c() {
 
 // ]
 
-//    delay(1000); // time to ESC
+    delay(500); // time to ESC
     calibrate_accel();
 
     pinMode(CURRENT_PIN,INPUT_ANALOG);
@@ -320,11 +403,9 @@ void setup_c() {
 
     tenzo2.init();	 //инициализация датчика момента  
 
-    current0 = analogRead(CURRENT_PIN);
-
     digitalWrite(LED_PIN, LED_OFF);
 
-    start_task(NULL, task_loop);
+//    start_task(NULL, task_loop);
 
     Serial.println("Propeller stand");
     Serial.println(" press 'h' to get help");  
@@ -334,16 +415,26 @@ void set_pwm(uint16_t val){
     uint16_t last = pwm_val;
     last_rpm=0;
     pwm_val = val;
+    motor_on = (val > MIN_PWM);
+    
+    debug_print("#set to ",val);
+
     servo1.writeMicroseconds(val); 
     delay(200); //  время на стабилизацию оборотов
 
+    time_last=0; // reset RPM time
     
     if(last == MIN_PWM || abs(pwm_val-last)>100){
         reset_rpm();
         uint32_t t=millis();
-        while(rpm==0) { // wait for RPM measure
+        start_rotation=0;
+        while(!start_rotation){ // wait for rotation
             if(millis()-t > 100) break;
         }
+
+        start_rotation=0;
+        Serial.println(" ok");    
+
     }
 
     if(val != MIN_PWM) {
@@ -376,6 +467,7 @@ void loop_c() {
                 in_count=0;
                 serial_buf[in_count]=0; // closed string
                 set_pwm(MIN_PWM );
+                debug_print("done");
                 break;
             }
             // no break!
@@ -387,19 +479,52 @@ void loop_c() {
 
     switch(current_mode) {
     case CALC_FORCE: {
+        if(rpm > 10) {  // fake data
+        
+            float force  = tenzo1.get_weight(regs[3]/1000.0);
+            float moment = tenzo2.get_weight(regs[4]/1000.0);
+  
+    
+            Serial.print(abs(force)); // 
+            Serial.print(' ');
+            Serial.print(abs(moment)); // момент
+            Serial.print(' ');   
+            Serial.print(volt );	//напряжение
+            Serial.print(' ');
+            Serial.print(current, DEC); //ток
+            Serial.print(' ');
+            Serial.print(pwm_val);	//сервосигнал
+            Serial.print(' ');  
+            Serial.println(rpm); //обороты
+
+        }
+
+        if(got_string) {
+            set_pwm(atoi(serial_buf)); 
+        }
+
+        currentMillis = millis();
+
+        if(rpm > 10) {  // fake data
+
+            if( currentMillis - previousMillis > STOP_TIME) { //  остановка при потере связи
+                debug_print("timeout");
+                set_pwm(MIN_PWM );    
+            }
+        }
+    } break;
+
+    case FORCE_DEBUG: { // without motor
         float force  = tenzo1.get_weight(regs[3]/1000.0);
         float moment = tenzo2.get_weight(regs[4]/1000.0);
-  
-        uint16_t Volt    = analogRead(VOLTAGE_PIN); //чтение напряжения
-        int16_t current  = analogRead(CURRENT_PIN);
-    
-        Serial.print(abs(force)); // 
+      
+        Serial.print(force); // 
         Serial.print(' ');
-        Serial.print(abs(moment)); // момент
+        Serial.print(moment); // момент
         Serial.print(' ');   
-        Serial.print(Volt * regs[1] / 1000.0);	//напряжение
+        Serial.print(volt);	//напряжение
         Serial.print(' ');
-        Serial.print((current-current0) * regs[2] / 1000.0, DEC); //ток
+        Serial.print(current, DEC); //ток
         Serial.print(' ');
         Serial.print(pwm_val);	//сервосигнал
         Serial.print(' ');  
@@ -408,33 +533,6 @@ void loop_c() {
         if(got_string) {
             set_pwm(atoi(serial_buf)); 
         }
-
-        currentMillis = millis();
-
-        if( currentMillis - previousMillis > STOP_TIME) { //  остановка при потере связи
-            set_pwm(MIN_PWM );
-        }
-    } break;
-
-    case FORCE_DEBUG: { // without motor
-        float force  = tenzo1.get_weight(regs[3]/1000.0);
-        float moment = tenzo2.get_weight(regs[4]/1000.0);
-  
-        uint16_t Volt   = analogRead(VOLTAGE_PIN); //чтение напряжения
-        int16_t current = analogRead(CURRENT_PIN);
-        if(current<current0) current0=current;
-    
-        Serial.print(force); // 
-        Serial.print(' ');
-        Serial.print(moment); // момент
-        Serial.print(' ');   
-        Serial.print(Volt / ( regs[1] / 1000.0));	//напряжение
-        Serial.print(' ');
-        Serial.print((current-current0) * regs[2] / 1000.0, DEC); //ток
-        Serial.print(' ');
-        Serial.print(pwm_val);	//сервосигнал
-        Serial.print(' ');  
-        Serial.println(rpm); //обороты
 
     } break;
         
@@ -446,6 +544,7 @@ void loop_c() {
         currentMillis = millis();
 
         if( currentMillis - previousMillis > STOP_TIME) { //  остановка при потере связи
+            debug_print("timeout");
             set_pwm(MIN_PWM );
         }
         
@@ -456,6 +555,10 @@ void loop_c() {
     case BALANCE_DEBUG:  // without motor
         
         get_samples(); // read ADXL and send samples
+
+        if(got_string) {
+            set_pwm(atoi(serial_buf)); 
+        }
         
         break;
 
@@ -466,20 +569,26 @@ void loop_c() {
         if(last_rpm != rpm) {
             Serial.print(pwm_val);	//сервосигнал
             Serial.print(' ');  
-            Serial.println(rpm); //обороты
+            Serial.print(rpm); //обороты
             last_rpm = rpm;
+            
+            Serial.print(' ');  
+            Serial.print(1.0 * dt/us_ticks); // время оборота в мкс            
+            Serial.println();
         }
 
         if(start_rotation) { // each rotation
             start_rotation=0;
             uint16_t nv=hist_last_ptr;
 
-            Serial.print(nv);
-            Serial.print("> ");
-            for(int i=0;i<nv; i++){
-                Serial.print(timer_last_hist[i]);
-                Serial.print(' ');
-            }                
+            if(nv){
+                Serial.print(nv);
+                Serial.print("> ");
+                for(int i=0;i<nv; i++){
+                    Serial.print(timer_last_hist[i]);
+                    Serial.print(' ');
+                }                
+            }
             Serial.println();
         }
 
@@ -487,7 +596,10 @@ void loop_c() {
  
 
     case WAIT_COMMAND: {
-        if(!got_string) break;
+        if(!got_string) {
+            delay(1);   // let co-process works
+            break;
+        }
 
         if(serial_buf[0] && serial_buf[1]==0 ){ // commands
             switch(serial_buf[0]){
@@ -500,6 +612,7 @@ void loop_c() {
             case 'g': // force
                 current_mode = FORCE_DEBUG;
                 Serial.println("Force debug mode");
+                reset_rpm();
                 break;
 
             case 'b':
@@ -511,6 +624,7 @@ void loop_c() {
             case 'c':
                 current_mode = BALANCE_DEBUG;
                 Serial.println("Balance debug mode");
+                reset_rpm();
                 break;
 
             case 'm':
@@ -522,20 +636,30 @@ void loop_c() {
 
             case 'h':
                 Serial.println("Commands:\n"
+                "Main commands:\n"
                 " f - measure force\n"
-                " b - balance\n"
+                " b - balance\n\n"
+                "Debug commands:\n"
                 " g - force debug\n"
                 " c - balance debug\n"
-                " m - motor debug\n"
+                " m - motor debug\n\n"
+                "Misc commands:\n"
                 " r - recalibrate\n"
+                " s - print all registers\n"
                 " w - write registers to EEPROM\n"
-                " Rn=val - set value to register\n\n"
+                " z - clear EEPROM\n"
+                " ! - reboot\n\n"
+                " Rn=val - set value to register\n"
+                " Rn? - show register value\n\n"
                 "Registers:\n"
                 " R0 - vibration coordinate\n"
                 " R1 - voltage factor * 1000\n"
                 " R2 - current factor * 1000\n"
                 " R3 - force tenzo factor * 1000\n"
-                " R4 - torque tenzo factor * 1000\n");
+                " R4 - torque tenzo factor * 1000\n"
+                " R5 - maximal motor speed, RPM\n"
+                " R6 - enable debug messages, 1/0\n"
+                );
                 
                 break;
                 
@@ -546,56 +670,69 @@ void loop_c() {
             
                 calibrate_accel();
             
+                
+                Serial.print(" current0=");
+                Serial.print(current0);
                 Serial.println(" done");
 
                 break;
 
             case 's':
-                Serial.print("R0="); Serial.println(regs[0]);
-                Serial.print("R1="); Serial.println(regs[1]);
-                Serial.print("R2="); Serial.println(regs[2]);
-                Serial.print("R3="); Serial.println(regs[3]);
-                Serial.print("R4="); Serial.println(regs[4]);
+                for(int i=0; i<7; i++){
+                    Serial.print('R');
+                    Serial.print(i);
+                    Serial.print('=');
+                    Serial.println(regs[i]);
+                }
                 break;
             
             case 'w':
                 eeprom_write_len((byte *)&regs, 0, sizeof(regs));
                 break;
             
+            case 'z':
+                EEPROM.format();
+                break;
+            
+            case '!':
+                nvic_sys_reset();
+                while(1) ;
+                break;
+            
             default:
-                Serial.print("Bad command - ");
-                Serial.println(serial_buf);
+                debug_print("Bad command - ", serial_buf);
             }
         
         } else { // variables: Rn=value or n?
-            // assume 1st char is R
-            char *bp=serial_buf+1;
+            if(serial_buf[0]=='R' || serial_buf[0]=='r'){
+                char *bp=serial_buf+1;
                             
-            byte n=atol(bp); 
-            if(n > sizeof(regs)/sizeof(uint32_t)) {
-                Serial.print("Bad register - ");
-                Serial.println(n);
+                byte n=atol(bp); 
+                if(n > sizeof(regs)/sizeof(uint32_t)) {
+                    debug_print("Bad register - ",n);
                 
-                    break;
-            }
-                            
-            bool ok=false;
-            while(*bp) {
-                if(*bp == '?' ){
-                    Serial.printf("R%d=%ld\n",n, regs[n]);
-                    ok=true;
-                    break;
+                        break;
                 }
-                if(*bp++ == '=') {
-                    regs[n] = atol(bp); // если не пустая строка то преобразовать и занести в численный параметр                
-                    ok=true;
-                    break;
-                }                
-            }
+                            
+                bool ok=false;
+                while(*bp) {
+                    if(*bp == '?' ){
+                        debug_print("R%d=%ld",n, regs[n]);
+                        ok=true;
+                        break;
+                    }
+                    if(*bp++ == '=') {
+                        regs[n] = atol(bp); // если не пустая строка то преобразовать и занести в численный параметр                
+                        ok=true;
+                        break;
+                    }                
+                }
             
-            if(!ok){
-                Serial.print("Bad command - ");
-                Serial.println(serial_buf);
+                if(!ok){
+                    debug_print("Bad command - ",serial_buf);
+                }
+            }else {
+                debug_print("Bad command - ", serial_buf);
             }
         
         }
@@ -606,7 +743,7 @@ void loop_c() {
         break;
     }
     
-    yield();
+    yield(0); // guaranteed one measure per loop
 }
 
 
@@ -627,21 +764,6 @@ uint8_t sendSPI2(uint8_t b)
   return b;
 }
 
-
-
-volatile uint32_t last_tim=0;
-
-
-uint32_t t_max=0;
-uint8_t rpm_mode = 0;
-volatile uint32_t int_cnt=0;
-//volatile uint16_t ovf_cnt=0;
-
-//volatile uint32_t int2_cnt=0;
-uint32_t res_time=0;
-
-uint32_t last_intcnt=0;
-uint16_t sides=0;
 
 
 /*
@@ -683,21 +805,48 @@ static uint32 _micros(void) {
 }
 */
 
+uint32_t last_dt;
+uint32_t revo_time=0;
+uint32_t tta=0;
+
 void calc_revo(){
-    start_rotation=1; // as label
 
     //uint32_t t = _micros(); // запомним его время
     uint32_t t = stopwatch_getticks();    
-    uint32_t dt = t - time_last;
+    uint32_t tl = time_last;
+    dt = t - tl;
     time_last = t;
 
+    if(tl==0) { // first interrupt
+//        revo_time=0;
+        tta=0;
+        rpm=0;
+        return;
+    }
+    if(dt < revo_time/10) { // skip short pulses
+        tta += dt;
+        return;         // ignore this interrupt        
+    } 
+
+    revo_time = dt + tta;
+    tta=0;
+
+
     //Update The RPM
-    if(dt > 0) {
+    if(dt != 0) {
         float r = 60000000.0 * us_ticks / dt / sides; // in RPM
 
-        if(rpm==0) rpm = r;
-        else       rpm += (r - rpm) / 8;        
+        float diff = abs(rpm-r) / (rpm+r) * 200; // diff in %
+
+        if(rpm==0 || diff>10) rpm = r;
+        else                  rpm += (r - rpm) / 8;       // комплиментарный фильтр 1/8 
+        
+        if(rpm > regs[5] || rpm < 10) return; // fake data
+
+
+        start_rotation=1; // as label
     }        
+
 
     memmove(timer_last_hist, timer_hist, sizeof(timer_hist) );
     hist_last_ptr=hist_ptr;
@@ -716,7 +865,7 @@ void fan_interrupt(){
 */    
 
     togglePin(LED_PIN);
-
+#if 0
     uint32_t capt = stopwatch_getticks();
     uint32_t dt = (capt - last_tim) / us_ticks;
     last_tim = capt;
@@ -774,6 +923,13 @@ void fan_interrupt(){
 //            if(t_max > 
         }
     }
+#else // single label
+
+
+    sides=1;
+    calc_revo();
+
+#endif
 }
 
 void fan_interrupt2(){

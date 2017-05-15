@@ -1,0 +1,11 @@
+[Stand]
+label7=Name
+label6=step time, ms
+label4=PWM
+btnStart=Start
+label3=step
+label2=Max
+label1=Min
+Reset=Reset to 0
+label5=Serial Port:
+BUT_ReadOSD=Connect

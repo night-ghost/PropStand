@@ -31,7 +31,7 @@
 // vibro
 
 
-#define MAX_SAMPLES 3200 // 1s
+#define MAX_SAMPLES 1600 // 0.5s
 
 // on SPI2
 #define ADXL345_CS PB12
