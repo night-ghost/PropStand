@@ -24,3 +24,35 @@ features:
 * command-line interface to change mode and to get/set calibration data
 * HX711 interface is fully rewritten
 
+console help:
+
+Commands:
+Main commands:
+ f - measure force
+ b - balance
+
+Debug commands:
+ g - force debug
+ c - balance debug
+ m - motor debug
+
+Misc commands:
+ r - recalibrate
+ s - print all registers
+ w - write registers to EEPROM
+ z - clear EEPROM
+ ! - reboot
+
+ Rn=val - set value to register
+ Rn? - show register value
+
+Registers:
+ R0 - vibration coordinate
+ R1 - voltage factor * 1000
+ R2 - current factor * 1000
+ R3 - force tenzo factor * 1000
+ R4 - torque tenzo factor * 1000
+ R5 - maximal motor speed, RPM
+ R6 - enable debug messages, 1/0
+ 
+ 
