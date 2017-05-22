@@ -56,3 +56,5 @@ Registers:
  R6 - enable debug messages, 1/0
  
  
+ use with my STM32duino fork - https://github.com/night-ghost/Arduino_STM32
+ 

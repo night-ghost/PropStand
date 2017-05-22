@@ -9,7 +9,7 @@ void Hx711::init() // 4.89 - 4.846
     //pinMode(_sck, OUTPUT);	
     //pinMode(_dt,  INPUT);
     gpio_set_mode(PIN_MAP[_sck].gpio_device, PIN_MAP[_sck].gpio_bit, GPIO_OUTPUT_PP);
-    gpio_set_mode(PIN_MAP[_dt].gpio_device, PIN_MAP[_dt].gpio_bit, GPIO_INPUT_PU);
+    gpio_set_mode(PIN_MAP[_dt ].gpio_device, PIN_MAP[_dt ].gpio_bit, GPIO_INPUT_PU);
     
     get_zero();
 }
@@ -25,10 +25,10 @@ void Hx711::get_zero()
     float sum = 0;
     
     for(int i=0; i<SUM_ZERO; i++) {
-	sum +=  read() /100.0;
+	sum +=  read();
     }
     
-    Weight_zero = sum / SUM_ZERO;
+    Weight_zero = sum / SUM_ZERO  /100.0;
 } 
 
 //****************************************************
@@ -56,9 +56,6 @@ unsigned long Hx711::read(void)	//усиление 128
 	uint32_t inp=0; 
 	unsigned char m;
 	volatile int err=0;
-
-//	digitalWrite(_dt, HIGH);
-//	delayMicroseconds(1);
 
 	digitalWrite(_sck, LOW);
 	delayMicroseconds(1);
@@ -89,7 +86,6 @@ unsigned long Hx711::read(void)	//усиление 128
  	digitalWrite(_sck, HIGH); // 25 pulse  - ch_A, 128
 	delayMicroseconds(1);
 	digitalWrite(_sck, LOW); 
-//	delayMicroseconds(1);
 
 	inp ^= 0x800000;                // 
 	

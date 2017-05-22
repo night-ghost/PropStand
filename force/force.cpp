@@ -8,8 +8,6 @@
 #include <Servo.h> 
 #include <libmaple/timer.h>
 
-//#include <stm32f4xx.h>
-//#include <hal.h>
 #include "stopwatch.h"
 
 
@@ -27,6 +25,11 @@
 #define USB_DP PA12
 #define USB_DM PA11
 
+/*
+
+    отказ от prinf освобождает ~20к флеша, что актуально для 64k версии
+
+*/
 
 void writeRegister(uint8_t registerAddress,uint8_t value);
 void readRegister(char registerAddress, int numBytes,unsigned char * values);
@@ -222,17 +225,12 @@ void debug_print(const char *s, char *s1){
     }
 }
 
-void debug_print(const char *s, uint16_t l1, uint32_t l2){
-    if(regs[6]){
-        Serial.print("#");
-        Serial.printf(s, l1,l2);      
-        Serial.println();         
-    }
-}
 
 
-#define VOLT_K 50.0
-#define CURR_K 50.0
+// и ток и напряжение сглаживается комплиментарным фильтром 1/K
+#define VOLT_K 20.0
+#define CURR_K 20.0
+
 
 void task_loop(){ // parallel process
     float volt_raw = analogRead(VOLTAGE_PIN) / (regs[1] / 1000.0); //чтение напряжения
@@ -260,6 +258,8 @@ void task_loop(){ // parallel process
 }
 
 void yield(uint16_t ttw){
+// сам параллельный процесс очень прост и занимает мало времени, поэтому можно отказаться от планировщика и просто запускать его явно
+
     task_loop();
 }
 
@@ -267,17 +267,12 @@ void setup_c() {
     pinMode(LED_PIN, OUTPUT);
     digitalWrite(LED_PIN, LED_ON);
 
-//    Serial.begin(115200);
+//    Serial.begin(115200); - in startup code
     Serial.end();
     
     stopwatch_init();
     
-    // search for BOARD_USB_DISC_BIT
-    
-//    USB_OTG_dev.regs.GREGS->GCCFG = 0;
-//    usb_suspend();
-
-    pinMode(USB_DP, OUTPUT);
+    pinMode(USB_DP, OUTPUT); // generate pulse on usb lines
     pinMode(USB_DM, OUTPUT);
     digitalWrite(USB_DP, 0);
     digitalWrite(USB_DM, 0);
@@ -433,7 +428,7 @@ void set_pwm(uint16_t val){
         }
 
         start_rotation=0;
-        Serial.println(" ok");    
+//        debug_print("ok");
 
     }
 
@@ -441,6 +436,20 @@ void set_pwm(uint16_t val){
         previousMillis = millis();
     }
 
+}
+
+
+void work_command(){
+    switch(serial_buf[0]){
+    case 'm': // motor speed
+        set_pwm(atoi(serial_buf+1)); 
+        break;
+        
+    case 'b': // balance time for blink
+        // blink = atoi(serial_buf+1);
+        break
+    }
+        
 }
 
 void loop_c() {  
@@ -500,7 +509,7 @@ void loop_c() {
         }
 
         if(got_string) {
-            set_pwm(atoi(serial_buf)); 
+            work_command();
         }
 
         currentMillis = millis();
@@ -531,14 +540,14 @@ void loop_c() {
         Serial.println(rpm); //обороты
 
         if(got_string) {
-            set_pwm(atoi(serial_buf)); 
+            work_command();
         }
 
     } break;
         
     case BALANCE: {
         if(got_string) {
-            set_pwm(atoi(serial_buf)); 
+            work_command();
         }
 
         currentMillis = millis();
@@ -557,14 +566,14 @@ void loop_c() {
         get_samples(); // read ADXL and send samples
 
         if(got_string) {
-            set_pwm(atoi(serial_buf)); 
+           work_command();
         }
         
         break;
 
     case MOTOR_DEBUG:
         if(got_string) {
-            set_pwm(atoi(serial_buf)); 
+            work_command();
         }
         if(last_rpm != rpm) {
             Serial.print(pwm_val);	//сервосигнал
@@ -704,20 +713,25 @@ void loop_c() {
             }
         
         } else { // variables: Rn=value or n?
+            bool ok=false;
+
             if(serial_buf[0]=='R' || serial_buf[0]=='r'){
                 char *bp=serial_buf+1;
                             
                 byte n=atol(bp); 
                 if(n > sizeof(regs)/sizeof(uint32_t)) {
                     debug_print("Bad register - ",n);
-                
-                        break;
+                    ok=true;                
+                    break;
                 }
                             
-                bool ok=false;
                 while(*bp) {
                     if(*bp == '?' ){
-                        debug_print("R%d=%ld",n, regs[n]);
+                        Serial.print('R');
+                        Serial.print(n);
+                        Serial.print('=');
+                        Serial.println(regs[n]);
+
                         ok=true;
                         break;
                     }
@@ -728,11 +742,10 @@ void loop_c() {
                     }                
                 }
             
-                if(!ok){
-                    debug_print("Bad command - ",serial_buf);
-                }
-            }else {
-                debug_print("Bad command - ", serial_buf);
+            }
+
+            if(!ok){
+                debug_print("Bad command - ",serial_buf);
             }
         
         }
@@ -744,6 +757,10 @@ void loop_c() {
     }
     
     yield(0); // guaranteed one measure per loop
+    return;
+
+
+
 }
 
 

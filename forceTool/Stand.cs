@@ -245,11 +245,22 @@ namespace OSD {
 
         StreamWriter sw;
 
+        const int Data_Size = 300;// width of scales
+
+        struct Graph {
+            public System.Windows.Forms.PictureBox pb;
+            public double[] data;
+        };
+
+        Graph[] all_gr = new Graph[7];
+
+        
         private void btnStart_Click(object sender, EventArgs e) {
             started = !started;
             
 
             if (started) {
+                
                 if (comPort.IsOpen)
                     comPort.Close();
 
@@ -335,13 +346,18 @@ namespace OSD {
             int step = int.Parse(txtStep.Text);
             int max = int.Parse(txtMax.Text);
             int steptime = int.Parse(txtStepTime.Text); 
+            double last_pwm=0;
             
             while (can_run) {
-                comWrite(pwm.ToString());
-
+                comWrite("m" + pwm.ToString());
+                last_pwm=millis();
                 while ((millis() - t < steptime || val_count == 0) && can_run) {
                     parsePort();
                     if(millis() - t > steptime*5) break; // no data for long time
+                    if(millis() - last_pwm >300) {
+                        comWrite("m" + pwm.ToString()); // send PWM each 300ms
+                        last_pwm=millis();
+                    }
                 }
 
                 if (pwm >= max) {
@@ -357,6 +373,7 @@ namespace OSD {
 
                 t=millis();
                 pwm+=step;
+                last_pwm=0;
                 this.BeginInvoke((MethodInvoker)delegate {
                     txtPWM.Text = pwm.ToString();
                 });
@@ -419,6 +436,7 @@ namespace OSD {
 
                     vals[i]/=val_count;
                     sw.Write (vals[i]);
+                    drawGraph(all_gr[i].pb, all_gr[i].data, vals[i]);
 
                     vals[i]=0;
                 }
@@ -503,6 +521,54 @@ namespace OSD {
 
 
 
+        void drawGraph(System.Windows.Forms.PictureBox pb, double[] data, double v) {
+           // int x0 = pb.Width / 2;
+            int y0 = pb.Height-1 ;
+
+            image = new Bitmap(pb.Width, pb.Height);
+            //pb.Tag 
+
+            Graphics grfull = Graphics.FromImage(image);
+
+            grfull.DrawLine(new Pen(Color.Gray, 1), 0, y0, pb.Width, y0);
+            grfull.DrawLine(new Pen(Color.Gray, 1), 0, 0, 0, pb.Height);
+            grfull.DrawLine(new Pen(Color.Gray, 1), pb.Width - 1, 0, pb.Width - 1, pb.Height);
+
+            double max=data[0];
+
+            for (int i = 1; i < data.Length; i++) {
+
+                if(data[i]>max) max=data[i];
+            }
+
+
+            for (int i = 0; i < data.Length; i++) {
+
+                
+                double vv = data[i];
+                if(max!=0) vv/=max;
+                else       vv=0;
+
+                int dv;
+                try {
+                    dv = (int)(y0 * vv);
+                } catch {
+                    dv = 0;
+                }
+
+                try {
+                    //grfull.
+                    grfull.DrawLine(new Pen(Color.Blue, 1), i, y0 - dv, i + 1, y0 - dv);
+                } catch { }
+
+                if ((i + 1) < data.Length) // shift graph to left
+                    data[i] = data[i + 1];
+            }
+
+            data[data.Length - 1] = v;           
+
+            pb.Image = image;
+        }
 
 
         /*
@@ -757,71 +823,14 @@ namespace OSD {
                 }
 
 
-                void drawGraph(System.Windows.Forms.PictureBox pb, Vect[] data, double x, double y, double z) {
-                    int x0 = pb.Width / 2;
-                    int y0 = pb.Height / 2;
-
-                    image = new Bitmap(pb.Width, pb.Height);
-                    //pb.Tag 
-
-                    Graphics grfull = Graphics.FromImage(image);
-            
-                    grfull.DrawLine(new Pen(Color.Gray, 1), 0, y0,  pb.Width, y0);
-                    grfull.DrawLine(new Pen(Color.Gray, 1), 0, 0, 0, pb.Height );
-                    grfull.DrawLine(new Pen(Color.Gray, 1), pb.Width - 1, 0, pb.Width-1, pb.Height);            
-            
-                    for(int i=0; i<data.Length ; i++ ){
-                
-                        double  vx=data[i].x,
-                                vy=data[i].y,
-                                vz=data[i].z;
-
-                        int dx, dy, dz;
-                        try {
-                            dx = (int)(y0 * vx);
-                            dy = (int)(y0 * vy);
-                            dz = (int)(y0 * vz);
-                        } catch {
-                            dx = 0;
-                            dy = 0;
-                            dz = 0;
-                        }
-                
-                        try {
-                            //grfull.
-                            grfull.DrawLine(new Pen(Color.Red, 1), i, y0-dx, i+1, y0 - dx);
-                        } catch { }
-
-                        try {
-                            grfull.DrawLine(new Pen(Color.Green, 1), i, y0-dy, i+1, y0 - dy);
-                        } catch { }
-
-                        try {
-                            grfull.DrawLine(new Pen(Color.Blue, 1), i, y0-dz, i+1, y0 - dz);
-                        } catch { }
-
-                        if((i+1)<data.Length)
-                            data[i] = data[i+1];
-                    }
-            
-                    data[data.Length - 1].x = x;
-                    data[data.Length - 1].y = y;
-                    data[data.Length - 1].z = z;
-            
-
-                    pb.Image = image;
-                }
         */
 
         string currentVersion = "";
 
         private void OSD_Load(object sender, EventArgs e) {
            
-
             Translate(this);
 
-
-            //string strVersion = System.Reflection.Assembly.GetExecutingAssembly().GetName().Version.ToString();
             this.Text = this.Text + " " + VERSION;
             currentVersion =  VERSION;
 
@@ -831,11 +840,17 @@ namespace OSD {
                 CMB_ComPort.SelectedIndex = 0;
 
             xmlconfig(false);
-            /*
-            drawArrow(picAcc, 0, 0, 0,0);
-            drawArrow(picMag, 0, 0, 0,0);
-            drawArrow(picGyr, 0, 0, 0,0);
-             */
+            
+            {
+                for (int j = 0; j < all_gr.Length; j++) {
+                    Control c = this.Controls.Find("picData" + j.ToString(), true).FirstOrDefault() as Control;
+                    all_gr[j].pb = (System.Windows.Forms.PictureBox)c;
+                    if(all_gr[j].pb!=null) {
+                        all_gr[j].data = new double[Data_Size];
+                        drawGraph(all_gr[j].pb, all_gr[j].data, 0);
+                    }
+                }
+            }
         }
 
         bool loop=false;
@@ -1641,6 +1656,8 @@ namespace OSD {
             CMB_ComPort.Items.Clear();
             CMB_ComPort.Items.AddRange(GetPortNames());
         }
+
+
 
        
 
