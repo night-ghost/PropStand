@@ -5,7 +5,6 @@
 #include <SPI.h>
 
 #include "HX711.h"
-#include <Servo.h> 
 #include <libmaple/timer.h>
 
 #include "stopwatch.h"
@@ -14,6 +13,17 @@
 #include <EEPROM.h>
 
 //#include "task.h"
+
+#define USE_SERVO_LIB 1
+
+
+#if USE_SERVO_LIB
+ #include <Servo.h> 
+
+ Servo servo1; //объявляем 
+
+#endif
+
 
 
 #define MIN_PWM 1000
@@ -55,7 +65,6 @@ float current0=0; // начальный ток модуля
 bool motor_on=false;
 
 
-Servo servo1; //объявляем 
 
 Hx711 tenzo1(HX711_A_SCK,HX711_A_DT);
 
@@ -134,54 +143,14 @@ uint32_t regs[16] = { // регистры настройки режимов
     415   * 1000L /20,// r4 - коэффициент тензодатчика момента, *1000
     10000,            // r5 - максимальные обороты мотора
     1,                // r6 - allow debug messages
+    0,                // r7 - rotation sensor mode: 0 - normal, 1 - raw
+    60,               // r8 - minimal motor speed, RPM
+    0,                // r9 - PWM control mode: 0 - 1000..2000 1 - 125-250 (OneShot125)
 };
 
 uint32 timer_tick;
 
-
-/* 
- * Provides a micro-second granular delay using the CPU cycle counter.
- */
-
-/*
-// cycles per microsecond 
-uint32_t us_ticks;
-
-
-void stopwatch_init(void)
-{
-//        RCC_ClocksTypeDef       clocks;
-        // compute the number of system clocks per microsecond 
-//        RCC_GetClocksFreq(&clocks);
-//        us_ticks = clocks.SYSCLK_Frequency / 1000000;
-        us_ticks = CYCLES_PER_MICROSECOND; // F_CPU / 1000000;
-
-        // turn on access to the DWT registers 
-        DEMCR |= DEMCR_TRCENA;
-        // enable the CPU cycle counter 
-        DWT_CTRL |= CYCCNTENA;
-
-        stopwatch_reset();
-}
-
-
-void stopwatch_delay_us(uint32_t us){
-//      stopwatch_reset(); we can't do that because any delay() in interrupt will reset main counter. It should be free running
-    uint32_t ts = stopwatch_getticks(); // start time in ticks
-    uint32_t dly = us * us_ticks;       // delay in ticks
-    while(1) {
-        uint32_t dt;
-        uint32_t now = stopwatch_getticks(); // current time in ticks
-
-        dt = now - ts;
-        if (dt >= dly)
-                break;
-    }
-}
-
-*/
-
-
+uint32_t blink;
 
 void  eeprom_read_len(byte *p, uint16_t e, uint16_t l){
     uint16_t *wp = (uint16_t  *)p;
@@ -306,20 +275,43 @@ void setup_c() {
   SPI.setClockDivider(SPI_CLOCK_DIV16);      // Slow speed (72 / 16 = 4.5 MHz SPI_1 speed)
   pinMode(SPI1_NSS_PIN, OUTPUT);
 
-
-  // Setup SPI 2
-  SPI_2.begin(); //Initialize the SPI_2 port.
-  SPI_2.setBitOrder(MSBFIRST); // Set the SPI_2 bit order
-  SPI_2.setDataMode(SPI_MODE0); //Set the  SPI_2 data mode 0
-  SPI_2.setClockDivider(SPI_CLOCK_DIV16);  // Use a different speed to SPI 1
-  pinMode(SPI2_NSS_PIN, OUTPUT);
 */  
 
 
- 
-    servo1.attach(PWM_PIN); //выход сервосигнала
+
+#if USE_SERVO_LIB
+    servo1.attach(PWM_PIN, 125, 2000, -180, 180); //выход сервосигнала
     servo1.writeMicroseconds(MIN_PWM);
-  
+#else
+    pinMode(PWM_PIN, PWM);
+
+// 2 millisecond period config (500Hz).  For a 1-based prescaler,
+
+#define CYC_MSEC        (1000 * CYCLES_PER_MICROSECOND)
+#define TAU_MSEC        2
+#define TAU_USEC        (TAU_MSEC * 1000)
+#define TAU_CYC         (TAU_MSEC * CYC_MSEC)
+
+#define SERVO_PRESCALER 9 // will be 8MHZ
+#define SERVO_OVERFLOW  ((uint16)round((double)TAU_CYC / SERVO_PRESCALER))
+
+#define US_TO_COMPARE(us) ((uint16)map((us), 0, TAU_USEC, 0, SERVO_OVERFLOW))
+
+    timer_dev *tdev = PIN_MAP[PWM_PIN].timer_device;
+
+    timer_pause(tdev);
+    timer_set_prescaler(tdev, SERVO_PRESCALER - 1); // prescaler is 1-based
+    timer_set_reload(tdev, SERVO_OVERFLOW);
+    timer_generate_update(tdev);
+    timer_resume(tdev);
+
+
+    if(regs[9]==1) {
+        pwmWrite(PWM_PIN, US_TO_COMPARE(MIN_PWM)/8); // PWM_125
+    } else {
+        pwmWrite(PWM_PIN, US_TO_COMPARE(MIN_PWM));
+    }
+#endif
 
 // [ vibro
 
@@ -330,10 +322,10 @@ void setup_c() {
     SPI_2.setBitOrder(MSBFIRST); // Set the SPI_2 bit order
     SPI_2.setClockDivider(SPI_CLOCK_DIV16);
 
-    //Set up the Chip Select pin to be an output from the Arduino.
-    pinMode(ADXL345_CS, OUTPUT);
-    //Before communication starts, the Chip Select pin needs to be set high.
-    digitalWrite(ADXL345_CS, HIGH);
+
+    pinMode(ADXL345_CS, OUTPUT);     //Set up the Chip Select pin to be an output from the Arduino.
+    digitalWrite(ADXL345_CS, HIGH); //Before communication starts, the Chip Select pin needs to be set high.
+    
     pinMode(ADXL345_READY, INPUT_PULLUP);
     pinMode(PHOTO_IN_PIN, INPUT_PULLUP);
 
@@ -414,7 +406,16 @@ void set_pwm(uint16_t val){
     
     debug_print("#set to ",val);
 
+#if USE_SERVO_LIB
     servo1.writeMicroseconds(val); 
+#else
+    if(regs[9]==1) {
+        pwmWrite(PWM_PIN, US_TO_COMPARE(val)/8); // PWM_125
+    } else {
+        pwmWrite(PWM_PIN, US_TO_COMPARE(val));
+    }
+#endif
+    
     delay(200); //  время на стабилизацию оборотов
 
     time_last=0; // reset RPM time
@@ -441,13 +442,14 @@ void set_pwm(uint16_t val){
 
 void work_command(){
     switch(serial_buf[0]){
+//    case '0'...'9':     // for compatibility
     case 'm': // motor speed
-        set_pwm(atoi(serial_buf+1)); 
+        set_pwm(atol(serial_buf+1)); 
         break;
         
     case 'b': // balance time for blink
-        // blink = atoi(serial_buf+1);
-        break
+        blink = atol(serial_buf+1);
+        break;
     }
         
 }
@@ -668,6 +670,8 @@ void loop_c() {
                 " R4 - torque tenzo factor * 1000\n"
                 " R5 - maximal motor speed, RPM\n"
                 " R6 - enable debug messages, 1/0\n"
+                " R7 - rotation sensor mode 0 - normal 1 - raw\n"
+                " R8 - minimal motor speed, RPM\n"
                 );
                 
                 break;
@@ -687,7 +691,7 @@ void loop_c() {
                 break;
 
             case 's':
-                for(int i=0; i<7; i++){
+                for(int i=0; i<10; i++){
                     Serial.print('R');
                     Serial.print(i);
                     Serial.print('=');
@@ -834,35 +838,68 @@ void calc_revo(){
     dt = t - tl;
     time_last = t;
 
-    if(tl==0) { // first interrupt
-//        revo_time=0;
-        tta=0;
+    if(tl==0) {// first interrupt
         rpm=0;
+        tta=0;
         return;
     }
-    if(dt < revo_time/10) { // skip short pulses
-        tta += dt;
-        return;         // ignore this interrupt        
-    } 
-
-    revo_time = dt + tta;
-    tta=0;
 
 
-    //Update The RPM
-    if(dt != 0) {
-        float r = 60000000.0 * us_ticks / dt / sides; // in RPM
+    float r = 60000000.0 * us_ticks / (dt + tta) / sides; // in RPM
+
+    if(regs[7]==1){ // raw mode
 
         float diff = abs(rpm-r) / (rpm+r) * 200; // diff in %
 
         if(rpm==0 || diff>10) rpm = r;
         else                  rpm += (r - rpm) / 8;       // комплиментарный фильтр 1/8 
         
-        if(rpm > regs[5] || rpm < 10) return; // fake data
+        if(rpm > regs[5] || rpm < regs[8]) return; // fake data
 
+        togglePin(LED_PIN);
 
         start_rotation=1; // as label
-    }        
+        return;    
+    }
+
+/*
+    if(tl==0) { // first interrupt
+//        revo_time=0;
+        tta=0;
+        rpm=0;
+        return;
+    }
+*/
+/*
+    if(dt < revo_time/10) { // skip short pulses
+        tta += dt;
+        return;         // ignore this interrupt        
+    } 
+
+    revo_time = dt + tta;
+*/
+
+    if(r > regs[5]) { // short pulse
+        tta += dt;
+        return;
+    }
+
+    tta=0;
+
+    if(r < regs[8]) return; // fake data
+
+    //Update The RPM
+
+    float diff = abs(rpm-r) / (rpm+r) * 200; // diff in %
+
+    if(rpm==0 || diff>10) rpm = r;
+    else                  rpm += (r - rpm) / 8;       // комплиментарный фильтр 1/8 
+        
+
+    togglePin(LED_PIN);
+
+
+    start_rotation=1; // as label
 
 
     memmove(timer_last_hist, timer_hist, sizeof(timer_hist) );
@@ -881,7 +918,6 @@ void fan_interrupt(){
     last_tim = capt;
 */    
 
-    togglePin(LED_PIN);
 #if 0
     uint32_t capt = stopwatch_getticks();
     uint32_t dt = (capt - last_tim) / us_ticks;
